@@ -26,4 +26,76 @@ struct Scheduler::Job {
     std::exception_ptr error, dependency_error;
 };
 
+struct Scheduler::State {
+    explicit State(std::size_t count, std::size_t trace_capacity) : ready(count) {
+        events.reserve(trace_capacity);
+    }
+    std::mutex mutex, shutdown_mutex;
+    std::condition_variable wake;
+    std::vector<std::thread> workers;
+    std::vector<std::list<std::shared_ptr<Job>>> ready;
+    std::list<std::shared_ptr<Job>> blocked;
+    std::shared_ptr<int> identity = std::make_shared<int>(0);
+    std::vector<Event> events;
+    Clock::time_point start = Clock::now();
+    std::size_t queued{}, outstanding{}, cursor{};
+    std::uint64_t serial{};
+    std::atomic<std::uint64_t> stolen{};
+    inline static thread_local State* current = nullptr;
+    bool closing{};
+
+    void run(std::size_t worker) {
+        current = this;
+        for (;;) {
+            std::unique_lock lock(mutex);
+            wake.wait(lock, [&] { return queued || (closing && !outstanding); });
+            if (!queued) return;
+            std::size_t queue = worker;
+            while (ready[queue].empty()) queue = (queue + 1) % ready.size();
+            auto& list = ready[queue];
+            auto job = queue == worker ? list.back() : list.front();
+            if (queue == worker) {
+                list.pop_back();
+            } else {
+                list.pop_front();
+                stolen.fetch_add(1, std::memory_order_relaxed);
+            }
+            --queued;
+            lock.unlock();
+            const auto begin = Clock::now();
+            auto error = job->dependency_error;
+            try {
+#ifdef JOBS_TRACY
+                ZoneScopedN("Job execution");
+#endif
+                if (!error) job->work();
+            } catch (...) { error = std::current_exception(); }
+            job->work = nullptr;
+            const auto end = Clock::now();
+            lock.lock();
+            job->completed = true;
+            job->error = error;
+            for (const auto& reference : job->dependents) {
+                if (auto next = reference.lock()) {
+                    if (error && !next->dependency_error) next->dependency_error = error;
+                    if (--next->remaining == 0) {
+                        ready[next->queue].splice(ready[next->queue].end(), blocked, next->blocked_at);
+                        ++queued;
+                    }
+                }
+            }
+            job->dependents.clear();
+            if (events.size() < events.capacity()) {
+                using Microseconds = std::chrono::duration<double, std::micro>;
+                events.push_back({job->id, worker, Microseconds(begin - start).count(),
+                                  Microseconds(end - start).count()});
+            }
+            if (error) job->done.set_exception(error); else job->done.set_value();
+            --outstanding;
+            lock.unlock();
+            wake.notify_all();
+        }
+    }
+};
+
 }
