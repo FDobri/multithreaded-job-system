@@ -98,4 +98,20 @@ struct Scheduler::State {
     }
 };
 
+Scheduler::Scheduler(std::size_t count, std::size_t trace_capacity) {
+    if (!count) throw std::invalid_argument("worker count must be positive");
+    state_ = std::make_unique<State>(count, trace_capacity);
+    state_->workers.reserve(count);
+    try {
+        for (std::size_t i = 0; i < count; ++i)
+            state_->workers.emplace_back([this, i] { state_->run(i); });
+    } catch (...) {
+        shutdown();
+        throw;
+    }
+}
+
+Scheduler::~Scheduler() { shutdown(); }
+void Scheduler::Handle::get() const { job_->result.get(); }
+
 }
