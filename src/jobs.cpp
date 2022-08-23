@@ -114,4 +114,48 @@ Scheduler::Scheduler(std::size_t count, std::size_t trace_capacity) {
 Scheduler::~Scheduler() { shutdown(); }
 void Scheduler::Handle::get() const { job_->result.get(); }
 
+Scheduler::Handle Scheduler::submit(std::function<void()> work, std::span<const Handle> after) {
+    if (!work) throw std::invalid_argument("job has no action");
+    auto& state = *state_;
+    auto job = std::make_shared<Job>(std::move(work), state.identity);
+    {
+        std::lock_guard lock(state.mutex);
+        if (state.closing) throw std::logic_error("scheduler is closed");
+        std::unordered_set<Job*> seen;
+        std::vector<Job*> pending;
+        for (const auto& handle : after) {
+            auto* dependency = handle.job_.get();
+            if (!dependency || dependency->owner.lock() != state.identity)
+                throw std::invalid_argument("dependency belongs to another scheduler");
+            if (!seen.insert(dependency).second) continue;
+            if (dependency->completed) {
+                if (!job->dependency_error) job->dependency_error = dependency->error;
+            } else {
+                auto& dependents = dependency->dependents;
+                if (dependents.size() == dependents.capacity()) {
+                    const auto growth = dependents.size() < dependents.max_size() / 2
+                        ? dependents.size() * 2 + 1 : dependents.max_size();
+                    if (growth == dependents.size()) throw std::length_error("too many dependents");
+                    dependents.reserve(growth);
+                }
+                pending.push_back(dependency);
+            }
+        }
+        job->id = ++state.serial;
+        job->queue = state.cursor;
+        state.cursor = (state.cursor + 1) % state.ready.size();
+        job->remaining = pending.size();
+        if (pending.empty()) {
+            state.ready[job->queue].push_back(job);
+            ++state.queued;
+        } else {
+            job->blocked_at = state.blocked.insert(state.blocked.end(), job);
+            for (auto* dependency : pending) dependency->dependents.push_back(job);
+        }
+        ++state.outstanding;
+    }
+    state.wake.notify_one();
+    return Handle(std::move(job));
+}
+
 }
