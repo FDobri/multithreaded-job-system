@@ -158,4 +158,25 @@ Scheduler::Handle Scheduler::submit(std::function<void()> work, std::span<const 
     return Handle(std::move(job));
 }
 
+void Scheduler::shutdown() {
+    auto& state = *state_;
+    if (State::current == &state) throw std::logic_error("workers cannot join their own scheduler");
+    std::lock_guard join(state.shutdown_mutex);
+    {
+        std::lock_guard lock(state.mutex);
+        state.closing = true;
+    }
+    state.wake.notify_all();
+    for (auto& worker : state.workers)
+        if (worker.joinable()) worker.join();
+}
+
+std::vector<Event> Scheduler::trace() const {
+    std::lock_guard lock(state_->mutex);
+    return state_->events;
+}
+}
+
+std::uint64_t jobs::Scheduler::steal_count() const noexcept {
+    return state_->stolen.load(std::memory_order_relaxed);
 }
