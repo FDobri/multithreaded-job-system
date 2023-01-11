@@ -16,3 +16,12 @@ TEST(Scheduler, DependencyDiamondAndDrain) {
     EXPECT_EQ(scheduler.trace().size(), 4u);
     EXPECT_THROW(scheduler.submit([] {}), std::logic_error);
 }
+
+TEST(Scheduler, SkipsJobsAfterFailure) {
+    jobs::Scheduler scheduler(2);
+    const std::array parent{scheduler.submit([] { throw std::runtime_error("root"); })};
+    std::atomic<bool> ran = false;
+    auto child = scheduler.submit([&] { ran = true; }, parent);
+    EXPECT_THROW(child.get(), std::runtime_error);
+    EXPECT_FALSE(ran.load());
+}
