@@ -25,3 +25,9 @@ TEST(Scheduler, SkipsJobsAfterFailure) {
     EXPECT_THROW(child.get(), std::runtime_error);
     EXPECT_FALSE(ran.load());
 }
+
+TEST(Scheduler, RejectsDependenciesFromOtherSchedulers) {
+    jobs::Scheduler a(1), b(1);
+    const std::array handle{a.submit([] {})};
+    EXPECT_THROW(b.submit([] {}, handle), std::invalid_argument);
+}
