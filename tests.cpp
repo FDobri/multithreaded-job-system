@@ -31,3 +31,10 @@ TEST(Scheduler, RejectsDependenciesFromOtherSchedulers) {
     const std::array handle{a.submit([] {})};
     EXPECT_THROW(b.submit([] {}, handle), std::invalid_argument);
 }
+
+TEST(Scheduler, RejectsShutdownFromItsOwnWorker) {
+    jobs::Scheduler scheduler(1);
+    auto task = scheduler.submit([&] { scheduler.shutdown(); });
+    EXPECT_THROW(task.get(), std::logic_error);
+    scheduler.shutdown();
+}
