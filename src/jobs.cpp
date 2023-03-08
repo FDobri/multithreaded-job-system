@@ -9,6 +9,10 @@
 #include <thread>
 #include <unordered_set>
 
+#ifdef JOBS_TRACY
+#include <tracy/Tracy.hpp>
+#endif
+
 namespace jobs {
 using Clock = std::chrono::steady_clock;
 struct Scheduler::Job {
