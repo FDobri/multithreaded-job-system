@@ -10,3 +10,7 @@ ctest --test-dir build -C Release --output-on-failure
 python3 plot_trace.py trace.csv
 ./build/jobs_bench --benchmark_repetitions=5
 ```
+
+Use `build/Release/` for the executable path on multi-config generators. Open the generated `trace.svg` for a worker timeline, or configure with `-DJOBS_TRACY=ON` and connect a matching Tracy 0.11.1 profiler while running the demo or benchmark.
+
+## Design
